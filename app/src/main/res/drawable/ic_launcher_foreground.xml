@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Camera body -->
+    <path
+        android:fillColor="#FF6B35"
+        android:pathData="M30,38 L30,70 L78,70 L78,38 Z" />
+    <!-- Lens circle -->
+    <path
+        android:fillColor="#1A1A2E"
+        android:pathData="M54,54 m-12,0 a12,12 0 1,0 24,0 a12,12 0 1,0 -24,0" />
+    <!-- WiFi arc top -->
+    <path
+        android:strokeColor="#FF6B35"
+        android:strokeWidth="3"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M38,28 Q54,18 70,28" />
+    <!-- WiFi arc bottom -->
+    <path
+        android:strokeColor="#4CAF50"
+        android:strokeWidth="3"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M42,32 Q54,24 66,32" />
+</vector>

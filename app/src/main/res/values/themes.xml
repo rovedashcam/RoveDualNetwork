@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base theme needed by the manifest; Compose takes over at runtime -->
+    <style name="Theme.RoveDualNetwork" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:statusBarColor">#1A1A2E</item>
+        <item name="android:navigationBarColor">#1A1A2E</item>
+        <item name="android:windowBackground">#1A1A2E</item>
+    </style>
+</resources>

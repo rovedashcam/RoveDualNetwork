@@ -1,0 +1,5 @@
+-keep class com.rove.dualnetwork.api.** { *; }
+-keepattributes Signature
+-keepattributes *Annotation*
+-dontwarn retrofit2.**
+-keep class retrofit2.** { *; }

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+        Allow plain HTTP only for the dashcam's local IP.
+        Dashcam runs on LAN — no HTTPS/certificate possible for 192.168.x.x.
+        Change the domain to match your dashcam's actual IP.
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.1.253</domain>
+    </domain-config>
+
+    <!-- All internet traffic must use HTTPS -->
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>
