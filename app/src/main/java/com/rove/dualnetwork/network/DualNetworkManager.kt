@@ -19,7 +19,6 @@ import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.net.InetAddress
-import java.net.URI
 import java.util.concurrent.TimeUnit
 
 /**
@@ -42,10 +41,7 @@ class DualNetworkManager(private val context: Context) {
 
     companion object {
         private const val TAG = "DualNetworkManager"
-
-        const val DASHCAM_BASE_URL  = "http://192.168.1.253/"
         const val INTERNET_BASE_URL = "https://www.google.com/"
-        const val DASHCAM_SSID_PREFIX = "ROVE_R2-4K-DUAL-PRO_"
     }
 
     private val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -77,27 +73,24 @@ class DualNetworkManager(private val context: Context) {
         }
 
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-            val isDashcam = isDashcamNetwork(network)
             when {
                 // Late accept — SSID was UNKNOWN at onAvailable, now we can
-                // verify it matches.
-                isDashcam && currentWifiNetwork != network -> {
+                // verify it matches the selected model.
+                isDashcamNetwork(network) && currentWifiNetwork != network -> {
                     Log.i(TAG, "Late accept of dashcam network: $network")
                     acceptDashcam(network)
                 }
-                // Demote — we previously accepted this network but a fresh
-                // capabilities update reveals the SSID isn't a ROVE_*. (This
-                // is what catches a home wifi on 192.168.1.x that initially
-                // had no SSID readable.)
-                !isDashcam && currentWifiNetwork == network -> {
-                    Log.w(TAG, "Demoting previously-accepted network — SSID " +
-                               "no longer matches: $network")
+                // Demote ONLY when the SSID is readable and definitively
+                // doesn't match the selected model — an unreadable SSID
+                // (transient TransportInfo gap) must not tear adoption down.
+                isDefinitelyNotDashcam(network) && currentWifiNetwork == network -> {
+                    Log.w(TAG, "Demoting — SSID readable and does not match: $network")
                     currentWifiNetwork = null
                     dashcamRetrofit    = null
                     _state.update { it.copy(wifiReady = false) }
                     stopVpn()
                 }
-                isDashcam && currentWifiNetwork == network &&
+                currentWifiNetwork == network &&
                     caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) -> {
                     cm.reportNetworkConnectivity(network, false)
                 }
@@ -117,14 +110,19 @@ class DualNetworkManager(private val context: Context) {
     }
 
     private fun acceptDashcam(network: Network) {
-        if (currentWifiNetwork == network) return
+        // Idempotent: if we're already fully bound to this exact Network, no-op.
+        // BUT if dashcamRetrofit somehow ended up null while currentWifiNetwork
+        // points at this Network, fall through and rebuild — that's what makes
+        // the 1-second self-heal poll in the ViewModel actually heal.
+        if (currentWifiNetwork == network && dashcamRetrofit != null) return
         val routes = cm.getLinkProperties(network)?.routes?.joinToString(", ") {
             it.destination.toString()
         } ?: "?"
-        Log.i(TAG, "Dashcam WiFi connected [network=$network, routes=$routes]")
+        Log.i(TAG, "Dashcam WiFi connected [network=$network, routes=$routes, " +
+                   "model=${DashcamConfig.selected}]")
         currentWifiNetwork = network
         runCatching { cm.reportNetworkConnectivity(network, false) }
-        dashcamRetrofit = buildRetrofit(network, DASHCAM_BASE_URL, timeoutSec = 10L)
+        dashcamRetrofit = buildRetrofit(network, DashcamConfig.baseUrl, timeoutSec = 10L)
         _state.update { it.copy(wifiReady = true) }
         if (vpnPermissionGranted) startVpn()
     }
@@ -202,9 +200,16 @@ class DualNetworkManager(private val context: Context) {
         tryAdoptAlreadyConnectedDashcam()
     }
 
-    /** Walk every visible network; if one is the dashcam, adopt it. */
+    /**
+     * Walk every visible network; if one matches the selected dashcam model,
+     * adopt (or re-adopt) it.
+     *
+     * We re-attempt as long as either [currentWifiNetwork] or [dashcamRetrofit]
+     * is null, so the ViewModel's 1-second self-heal poll can recover from a
+     * stale-state situation where one was set but the other wasn't.
+     */
     fun tryAdoptAlreadyConnectedDashcam() {
-        if (currentWifiNetwork != null) return
+        if (currentWifiNetwork != null && dashcamRetrofit != null) return
         for (net in cm.allNetworks) {
             val caps = cm.getNetworkCapabilities(net) ?: continue
             if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
@@ -214,6 +219,8 @@ class DualNetworkManager(private val context: Context) {
                 return
             }
         }
+        Log.d(TAG, "tryAdoptAlreadyConnectedDashcam: no matching wifi found among " +
+                   "${cm.allNetworks.size} networks (model=${DashcamConfig.selected})")
     }
 
     fun stop() {
@@ -251,10 +258,11 @@ class DualNetworkManager(private val context: Context) {
         // legitimate dashcam Network and leave the buttons greyed out.
         val lp = cm.getLinkProperties(network)
         val routes = lp?.routes?.joinToString(", ") { it.destination.toString() } ?: "?"
-        Log.i(TAG, "Adopting dashcam network [network=$network, routes=$routes]")
+        Log.i(TAG, "Adopting dashcam network [network=$network, routes=$routes, " +
+                   "model=${DashcamConfig.selected}]")
         currentWifiNetwork = network
         runCatching { cm.reportNetworkConnectivity(network, false) }
-        dashcamRetrofit = buildRetrofit(network, DASHCAM_BASE_URL, timeoutSec = 10L)
+        dashcamRetrofit = buildRetrofit(network, DashcamConfig.baseUrl, timeoutSec = 10L)
         _state.update { it.copy(wifiReady = true) }
         if (vpnPermissionGranted) startVpn()
     }
@@ -267,6 +275,23 @@ class DualNetworkManager(private val context: Context) {
         dashcamRetrofit    = null
         _state.update { it.copy(wifiReady = false) }
         stopVpn()
+    }
+
+    /**
+     * Called by the ViewModel after the user picks a different camera in the
+     * dropdown. The currently-bound network and Retrofit were configured for
+     * the OLD model — drop them, then scan visible networks for one that
+     * matches the NEW model.
+     */
+    fun onCameraModelChanged() {
+        Log.i(TAG, "Camera model changed → ${DashcamConfig.selected}; re-evaluating wifi")
+        if (currentWifiNetwork != null) {
+            currentWifiNetwork = null
+            dashcamRetrofit    = null
+            _state.update { it.copy(wifiReady = false) }
+            stopVpn()
+        }
+        tryAdoptAlreadyConnectedDashcam()
     }
 
     // ── VPN control ───────────────────────────────────────────────────────────
@@ -292,46 +317,66 @@ class DualNetworkManager(private val context: Context) {
      *  - The network must own a route to 192.168.1.253 (existing check —
      *    rules out non-dashcam home networks on different subnets).
      *  - **AND** on Android 12+, the network's SSID (read via TransportInfo)
-     *    must start with [DASHCAM_SSID_PREFIX]. This blocks two failure
+     *    must match [DashcamConfig.matchesSsid]. This blocks two failure
      *    modes that previously surfaced as "Failed to connect to
      *    /192.168.1.253:80" even though the WiFi pill was green:
      *      a) a home/office WiFi happens to use the same 192.168.1.x subnet;
      *      b) an app-scoped Network from WifiNetworkSpecifier briefly has
      *         wifi transport but no live route to the dashcam.
      */
+    /**
+     * Two-tier check:
+     *  1. SSID readable + matches selected model → ACCEPT (doesn't matter
+     *     which subnet — the camera's WiFi is the camera's WiFi).
+     *  2. SSID not readable (rare with location permission) → fall back to
+     *     a route to [DashcamConfig.host] + no-internet capability.
+     *  3. SSID readable + does NOT match → REJECT.
+     *
+     * Rejecting on a missing route was producing false negatives: a manually-
+     * joined dashcam wifi sometimes reports its routes a beat after onAvailable
+     * fires, and we'd reject the network for the lifetime of that connection.
+     */
     private fun isDashcamNetwork(network: Network): Boolean {
-        val lp = cm.getLinkProperties(network) ?: return false
-        val dashcamAddr = try { InetAddress.getByName(URI(DASHCAM_BASE_URL).host) }
-                          catch (_: Exception) { return false }
+        val lp   = cm.getLinkProperties(network)
+        val caps = cm.getNetworkCapabilities(network)
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && caps != null) {
+            val info = caps.transportInfo as? WifiInfo
+            val ssid = info?.ssid?.removeSurrounding("\"")
+            val ssidReadable = !ssid.isNullOrBlank() &&
+                               ssid != "<unknown ssid>" &&
+                               ssid != WifiManager.UNKNOWN_SSID
+            Log.d(TAG, "isDashcamNetwork ssid=$ssid readable=$ssidReadable " +
+                       "model=${DashcamConfig.selected}")
+            if (ssidReadable) {
+                return DashcamConfig.matchesSsid(ssid!!)
+            }
+        }
+
+        // SSID unreadable: route-based heuristic.
+        if (lp == null || caps == null) return false
+        val dashcamAddr = try { InetAddress.getByName(DashcamConfig.host) }
+                          catch (_: Exception) { return false }
         val hasRoute = lp.routes.any { route ->
             !route.isDefaultRoute &&
             runCatching { route.destination.contains(dashcamAddr) }.getOrDefault(false)
         }
-        if (!hasRoute) return false
+        return hasRoute && !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val caps = cm.getNetworkCapabilities(network) ?: return false
-            val info = caps.transportInfo as? WifiInfo
-            val ssid = info?.ssid?.removeSurrounding("\"")
-            Log.d(TAG, "isDashcamNetwork ssid=$ssid (route matched)")
-            // If SSID is readable, it must match. If TransportInfo can't
-            // expose the SSID for a foreign-app network even with location
-            // permission, fall back to the route check — a network with a
-            // 192.168.1.0/24 route AND no internet capability is, in
-            // practice, the dashcam. Home wifi gets caught here because its
-            // SSID *is* readable to us (we own it via the system default).
-            if (!ssid.isNullOrBlank() &&
-                ssid != "<unknown ssid>" &&
-                ssid != WifiManager.UNKNOWN_SSID) {
-                return ssid.startsWith(DASHCAM_SSID_PREFIX)
-            }
-            // Tighten the route fallback by also requiring "no internet" —
-            // home/office wifi advertises NET_CAPABILITY_INTERNET, dashcam
-            // does not.
-            return !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-        }
-        return true
+    /**
+     * Stricter cousin of [isDashcamNetwork] — used for *demotion* only. We
+     * must be CERTAIN the network isn't ours before tearing the Retrofit
+     * down, so we only demote when the SSID is readable and definitively
+     * doesn't match. An unreadable SSID is never grounds for demotion.
+     */
+    private fun isDefinitelyNotDashcam(network: Network): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+        val caps = cm.getNetworkCapabilities(network) ?: return false
+        val info = caps.transportInfo as? WifiInfo ?: return false
+        val ssid = info.ssid?.removeSurrounding("\"") ?: return false
+        if (ssid == "<unknown ssid>" || ssid == WifiManager.UNKNOWN_SSID) return false
+        return !DashcamConfig.matchesSsid(ssid)
     }
 
     private fun buildRetrofit(network: Network, baseUrl: String, timeoutSec: Long): Retrofit {

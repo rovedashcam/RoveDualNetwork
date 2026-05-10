@@ -41,8 +41,6 @@ class WifiAutoConnector(private val context: Context) {
 
     companion object {
         private const val TAG = "WifiAutoConnector"
-        const val SSID_PREFIX = "ROVE_R2-4K-DUAL-PRO_"
-        const val PASSPHRASE  = "12345678"
     }
 
     enum class State { Idle, Connecting, Connected, Failed, Unsupported, NoPermission, WifiOff }
@@ -62,7 +60,7 @@ class WifiAutoConnector(private val context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             onResult(State.Unsupported,
                 "Auto-connect requires Android 10+. Use Open WiFi Settings to join " +
-                "${SSID_PREFIX}… manually.")
+                "the ${DashcamConfig.displayName} network manually.")
             return State.Unsupported
         }
         if (!hasNearbyWifiPermission()) {
@@ -138,7 +136,7 @@ class WifiAutoConnector(private val context: Context) {
 
     // ── Internals ────────────────────────────────────────────────────────────
 
-    /** SSID of the system-default wifi network IF it starts with our prefix. */
+    /** SSID of any wifi network whose SSID matches the [selected][DashcamConfig.selected] camera. */
     private fun currentSystemRoveSsid(): String? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             for (net in cm.allNetworks) {
@@ -147,13 +145,13 @@ class WifiAutoConnector(private val context: Context) {
                 val info = caps.transportInfo as? WifiInfo ?: continue
                 val ssid = info.ssid?.removeSurrounding("\"") ?: continue
                 if (ssid == "<unknown ssid>" || ssid == WifiManager.UNKNOWN_SSID) continue
-                if (ssid.startsWith(SSID_PREFIX)) return ssid
+                if (DashcamConfig.matchesSsid(ssid)) return ssid
             }
         }
         @Suppress("DEPRECATION")
         val raw = wifiManager.connectionInfo?.ssid?.removeSurrounding("\"") ?: return null
         if (raw == "<unknown ssid>" || raw == WifiManager.UNKNOWN_SSID) return null
-        return if (raw.startsWith(SSID_PREFIX)) raw else null
+        return if (DashcamConfig.matchesSsid(raw)) raw else null
     }
 
     private fun scanForRoveSsid(callback: (String?) -> Unit) {
@@ -184,7 +182,7 @@ class WifiAutoConnector(private val context: Context) {
 
     private fun cachedRoveSsid(): String? = try {
         wifiManager.scanResults
-            .firstOrNull { it.SSID?.startsWith(SSID_PREFIX) == true }
+            .firstOrNull { it.SSID?.let { s -> DashcamConfig.matchesSsid(s) } == true }
             ?.SSID
     } catch (_: SecurityException) { null }
 
@@ -193,7 +191,7 @@ class WifiAutoConnector(private val context: Context) {
         try {
             val suggestion = WifiNetworkSuggestion.Builder()
                 .setSsid(ssid)
-                .setWpa2Passphrase(PASSPHRASE)
+                .setWpa2Passphrase(DashcamConfig.PASSPHRASE)
                 .setIsAppInteractionRequired(false)
                 .build()
             wifiManager.removeNetworkSuggestions(listOf(suggestion))
@@ -212,7 +210,7 @@ class WifiAutoConnector(private val context: Context) {
     ) {
         val specifier = WifiNetworkSpecifier.Builder()
             .setSsid(ssid)
-            .setWpa2Passphrase(PASSPHRASE)
+            .setWpa2Passphrase(DashcamConfig.PASSPHRASE)
             .build()
         val request = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)

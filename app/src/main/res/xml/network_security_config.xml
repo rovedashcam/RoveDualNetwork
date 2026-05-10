@@ -1,14 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
     <!--
-        Allow plain HTTP only for the dashcam's local IP.
-        Dashcam runs on LAN — no HTTPS/certificate possible for 192.168.x.x.
-        Change the domain to match your dashcam's actual IP.
+        Allow plain HTTP for known dashcam IPs on the LAN.
+
+        Each Rove dashcam ships with its own static IP on its private WiFi —
+        e.g. 192.168.1.253 (R2 4K Dual Pro) or 192.168.1.252 (R2 4K Dual).
+        Cleartext is required because there's no HTTPS certificate for a
+        192.168.x.x address.
+
+        IMPORTANT: this list must include whatever IP is set in
+        com.rove.dualnetwork.network.DashcamConfig.HOST. XML files cannot
+        reference Kotlin constants, so this is the one place you have to
+        keep in sync manually if you support a new dashcam IP.
     -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">192.168.1.253</domain>
+        <!-- Must include the host of every CameraModel entry. -->
+        <domain includeSubdomains="false">192.168.1.248</domain>  <!-- R3 -->
+        <domain includeSubdomains="false">192.168.1.252</domain>  <!-- ROVE_R2-4K-DUAL -->
+        <domain includeSubdomains="false">192.168.1.253</domain>  <!-- ROVE_R2-4K-DUAL-PRO -->
     </domain-config>
 
-    <!-- All internet traffic must use HTTPS -->
+    <!-- All other (internet) traffic must use HTTPS. -->
     <base-config cleartextTrafficPermitted="false" />
 </network-security-config>

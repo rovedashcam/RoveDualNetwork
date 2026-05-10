@@ -34,6 +34,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.rove.dualnetwork.network.CameraModel
+import com.rove.dualnetwork.network.DashcamConfig
 import com.rove.dualnetwork.network.NetworkState
 import com.rove.dualnetwork.network.WifiAutoConnector
 import com.rove.dualnetwork.ui.theme.GreenOnline
@@ -92,17 +94,39 @@ class MainActivity : ComponentActivity() {
                 ) {
                     MainScreen(
                         viewModel,
-                        onRetryAutoConnect = ::ensureWifiPermissionThenConnect,
-                        onOpenWifiSettings = viewModel::openWifiSettings
+                        onRetryAutoConnect = ::userTriggeredConnect,
+                        onOpenWifiSettings = viewModel::openWifiSettings,
+                        onCameraSelected   = viewModel::selectCamera
                     )
                 }
             }
         }
     }
 
+    /**
+     * Silent on-launch entry point. Requests location/nearby permissions
+     * if needed, then runs the silent status check — never triggers the
+     * WiFi-suggestion or Connect-to-device system dialogs.
+     */
     private fun ensureWifiPermissionThenConnect() {
         if (viewModel.hasWifiPermission()) {
             viewModel.tryAutoConnectWifi()
+            return
+        }
+        val perms = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            perms.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+        }
+        wifiPermissionLauncher.launch(perms.toTypedArray())
+    }
+
+    /**
+     * User-initiated connect path. ONLY this method may trigger the system
+     * popups — invoked from the "Connect to dashcam" button.
+     */
+    private fun userTriggeredConnect() {
+        if (viewModel.hasWifiPermission()) {
+            viewModel.userConnectToDashcam()
             return
         }
         val perms = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -118,7 +142,8 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(
     viewModel: MainViewModel,
     onRetryAutoConnect: () -> Unit,
-    onOpenWifiSettings: () -> Unit
+    onOpenWifiSettings: () -> Unit,
+    onCameraSelected: (CameraModel) -> Unit
 ) {
     val net by viewModel.networkState.collectAsStateWithLifecycle()
     val ui  by viewModel.ui.collectAsStateWithLifecycle()
@@ -147,6 +172,7 @@ fun MainScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            CameraSelectorCard(ui.selectedCamera, onCameraSelected)
             CurrentSsidCard(ui, permissionStatus = viewModel.permissionStatus())
             AutoConnectCard(net, ui, onRetryAutoConnect, onOpenWifiSettings)
             NetworkStatusCard(net, ui)
@@ -157,12 +183,86 @@ fun MainScreen(
     }
 }
 
+// ── Camera Selector Card ──────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CameraSelectorCard(
+    selected: CameraModel,
+    onSelected: (CameraModel) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "Camera Model",
+                style = MaterialTheme.typography.titleMedium,
+                color = RoveOrange
+            )
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = !expanded }
+            ) {
+                OutlinedTextField(
+                    value = selected.displayName,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Selected camera", fontSize = 12.sp) },
+                    trailingIcon = {
+                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor()
+                )
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    CameraModel.values().forEach { model ->
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(model.displayName, fontWeight = FontWeight.Medium)
+                                    Text(
+                                        "host: ${model.host}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.Gray
+                                    )
+                                }
+                            },
+                            onClick = {
+                                onSelected(model)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+            Text(
+                text = "URL: ${selected.baseUrl}",
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = Color.Gray
+            )
+        }
+    }
+}
+
 // ── Current SSID Card ─────────────────────────────────────────────────────────
 
 @Composable
 fun CurrentSsidCard(ui: UiState, permissionStatus: String) {
     val ssid = ui.currentSsid
-    val onRove = ssid?.startsWith("ROVE_R2-4K-DUAL-PRO_") == true
+    val onRove = ssid?.let { DashcamConfig.matchesSsid(it) } == true
     val color = if (onRove) GreenOnline else Color(0xFFFFA726)
 
     Card(
@@ -187,8 +287,8 @@ fun CurrentSsidCard(ui: UiState, permissionStatus: String) {
             )
             if (ssid != null && !onRove) {
                 Text(
-                    text = "Not a dashcam network — expected SSID starting with " +
-                           "ROVE_R2-4K-DUAL-PRO_",
+                    text = "Not a ${ui.selectedCamera.displayName} network — " +
+                           "switch the dropdown or join its WiFi.",
                     style = MaterialTheme.typography.bodySmall,
                     color = RedOffline
                 )
@@ -313,12 +413,12 @@ fun NetworkStatusCard(net: NetworkState, ui: UiState) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                val onRove = ui.currentSsid?.startsWith("ROVE_R2-4K-DUAL-PRO_") == true
+                val onRove = ui.currentSsid?.let { DashcamConfig.matchesSsid(it) } == true
                 val effectivelyConnected = net.wifiReady || onRove
                 val wifiSub = when {
                     !effectivelyConnected      -> "Disconnected"
-                    ui.currentSsid != null     -> "${ui.currentSsid}\n192.168.1.253"
-                    else                       -> "192.168.1.253"
+                    ui.currentSsid != null     -> "${ui.currentSsid}\n${DashcamConfig.host}"
+                    else                       -> DashcamConfig.host
                 }
                 NetworkPill(
                     modifier = Modifier.weight(1f),
@@ -336,7 +436,7 @@ fun NetworkStatusCard(net: NetworkState, ui: UiState) {
                 )
             }
 
-            val onRoveForBanner = ui.currentSsid?.startsWith("ROVE_R2-4K-DUAL-PRO_") == true
+            val onRoveForBanner = ui.currentSsid?.let { DashcamConfig.matchesSsid(it) } == true
             if ((net.wifiReady || onRoveForBanner) && net.cellularReady) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -428,11 +528,11 @@ fun DashcamCard(net: NetworkState, ui: UiState, vm: MainViewModel) {
     // the specifier-granted Network — the user is clearly on the dashcam,
     // and our cached Retrofit is still valid, so buttons must stay tappable.
     val dashcamReady = net.wifiReady ||
-        (ui.currentSsid?.startsWith("ROVE_R2-4K-DUAL-PRO_") == true)
+        (ui.currentSsid?.let { DashcamConfig.matchesSsid(it) } == true)
 
     ApiCard(
         title    = "Dashcam API",
-        subtitle = "GET 192.168.1.253/?custom=1&cmd=1008&par=2  (via WiFi)",
+        subtitle = "GET ${DashcamConfig.host}/?custom=1&cmd=1008&par=2  (via WiFi)",
         icon     = Icons.Default.Videocam,
         enabled  = dashcamReady,
         loading  = ui.dashcamLoading,
@@ -610,7 +710,7 @@ fun HowItWorksCard() {
                 "1. registerNetworkCallback(WiFi) → watches dashcam connection",
                 "2. requestNetwork(CELLULAR) → forces Android to keep cellular alive",
                 "3. Each OkHttpClient binds to network.socketFactory",
-                "4. Dashcam Retrofit → WiFi socket → 192.168.1.253",
+                "4. Dashcam Retrofit → WiFi socket → ${DashcamConfig.host}",
                 "5. Internet Retrofit → Cellular socket → any internet host",
                 "",
                 "Min SDK 21 (Android 5.0+) required."
