@@ -140,6 +140,13 @@ class DualNetworkManager(private val context: Context) {
             DualNetworkVpnService.cellularNetwork = network
             internetRetrofit = buildRetrofit(network, INTERNET_BASE_URL, timeoutSec = 30L)
             _state.update { it.copy(cellularReady = true) }
+
+            // If we're already bound to the dashcam wifi and the user has
+            // approved the VPN, cellular just appearing is the missing piece
+            // — start the VPN now so other apps route through it.
+            if (currentWifiNetwork != null && vpnPermissionGranted) {
+                startVpn()
+            }
         }
 
         override fun onLost(network: Network) {
@@ -296,7 +303,27 @@ class DualNetworkManager(private val context: Context) {
 
     // ── VPN control ───────────────────────────────────────────────────────────
 
+    /**
+     * Starts the VPN tunnel that captures other apps' traffic and routes it
+     * through cellular while we're bound to the dashcam wifi.
+     *
+     * **The VPN is only meaningful when a cellular network is available.**
+     * If we start it without [currentCellularNetwork] set, every captured
+     * packet is dropped (the relay has nowhere to send it) and the user sees
+     * "You're offline. Turn on mobile data." in their browser. So we skip
+     * VPN start in the no-cellular case — Android's own routing falls back
+     * to the home/office wifi (which on Android 12+ stays alive as a
+     * concurrent network when our app uses ROVE via WifiNetworkSpecifier).
+     *
+     * If cellular comes in later, [cellularCallback.onAvailable] re-evaluates
+     * and starts the VPN at that point.
+     */
     private fun startVpn() {
+        if (currentCellularNetwork == null) {
+            Log.w(TAG, "Skipping VPN start: no cellular network. Other apps " +
+                       "will route through Android's default (typically home wifi).")
+            return
+        }
         DualNetworkVpnService.cellularNetwork = currentCellularNetwork
         context.startForegroundService(Intent(context, DualNetworkVpnService::class.java))
         Log.i(TAG, "VPN start requested")
