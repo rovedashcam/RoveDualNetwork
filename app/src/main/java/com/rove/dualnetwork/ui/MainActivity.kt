@@ -256,9 +256,13 @@ fun DashcamCard(net: NetworkState, ui: UiState, vm: MainViewModel) {
                 enabled = net.wifiReady && !ui.dashcamLoading
             ) { vm.showDashcamVideo() }
             ActionButton(
-                label   = "Stop",
+                label   = "Settings",
                 enabled = net.wifiReady && !ui.dashcamLoading
-            ) { vm.stopStream() }
+            ) { vm.showSettings() }
+            ActionButton(
+                label   = "Cmd 3022",
+                enabled = net.wifiReady && !ui.dashcamLoading
+            ) { vm.sendCmd3022() }
         }
     )
 }

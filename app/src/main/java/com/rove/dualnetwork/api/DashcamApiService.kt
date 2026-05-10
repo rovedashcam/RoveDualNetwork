@@ -20,6 +20,6 @@ interface DashcamApiService {
     suspend fun sendCommand(
         @Query("custom") custom: Int,
         @Query("cmd")    cmd:    Int,
-        @Query("par")    par:    Int
+        @Query("par")    par:    Int? = null
     ): Response<ResponseBody>
 }
