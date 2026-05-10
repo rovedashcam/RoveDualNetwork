@@ -6,6 +6,24 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
+    <!-- WiFi auto-connect to dashcam -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!--
+        ACCESS_FINE_LOCATION is required on ALL API levels to read the SSID
+        of the currently-connected WiFi via WifiInfo.getSsid() (otherwise
+        Android returns "<unknown ssid>"). We deliberately do NOT cap this at
+        API 32 — the SSID restriction extends through Android 14+.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!--
+        NEARBY_WIFI_DEVICES on Android 13+ allows WiFi scanning. We do NOT
+        set usesPermissionFlags="neverForLocation" because we DO want the
+        OS to expose SSID info to us (which it derives via location).
+    -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+
     <!-- Required to run the VPN as a foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- connectedDevice type is required on Android 14+ for network-managing services -->
